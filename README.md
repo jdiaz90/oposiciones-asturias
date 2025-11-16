@@ -1,6 +1,6 @@
-# Convocatorias Asturias
+# OposicionesAsturias
 
-Convocatorias Asturias es una aplicación en Python que automatiza la consulta de oposiciones y concursos publicados en el Boletín Oficial del Estado (BOE) relacionados con el Principado de Asturias.  
+OposicionesAsturias es una aplicación en Python que automatiza la consulta de oposiciones y concursos publicados en el Boletín Oficial del Estado (BOE) relacionados con el Principado de Asturias.  
 El programa descarga los sumarios oficiales de los últimos días, filtra las disposiciones relevantes y muestra los resultados en una tabla clara en consola.  
 
 Además, permite exportar la información a un archivo Excel con formato profesional:
