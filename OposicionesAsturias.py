@@ -4,6 +4,25 @@ import re, os
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
+import xml.etree.ElementTree as ET
+
+# -------------------------------
+# Función auxiliar: leer XML y devolver nota con "turno libre" o "promoción interna"
+# -------------------------------
+def obtener_nota_turno(url_xml):
+    try:
+        resp = requests.get(url_xml)
+        if resp.status_code == 200:
+            root = ET.fromstring(resp.content)
+            notas = root.findall(".//notas/nota")
+            for nota in notas:
+                texto = "".join(nota.itertext()).strip()
+                if "turno libre" in texto.lower() or "promoción interna" in texto.lower():
+                    return texto  # devolvemos la nota completa
+        return ""
+    except Exception as e:
+        print(f"⚠️ Error leyendo XML {url_xml}: {e}")
+        return ""
 
 # -------------------------------
 # Función 1: Obtener JSON del BOE
@@ -26,25 +45,22 @@ def obtener_sumario(fecha_str):
 def extraer_ayuntamiento(titulo):
     patron = r"(Ayuntamiento[^()]+)"
     coincidencia = re.search(patron, titulo)
-    if coincidencia:
-        return coincidencia.group(1).strip()
-    return titulo  # si no encuentra, devuelve el título completo
+    return coincidencia.group(1).strip() if coincidencia else titulo
 
 # -----------------------------------
-# Función 3: Filtrar por sección y palabra clave
+# Función 3: Filtrar por sección y palabra clave + leer XML
 # -----------------------------------
 def filtrar_oposiciones_asturias(data, seccion_objetivo="B. Oposiciones y concursos", palabra_clave="Asturias"):
     resultados = []
     diarios = data["data"]["sumario"]["diario"]
-    fecha_json = data["data"]["sumario"]["metadatos"]["fecha_publicacion"]  # AAAAMMDD
+    fecha_json = data["data"]["sumario"]["metadatos"]["fecha_publicacion"]
     fecha_formateada = datetime.strptime(fecha_json, "%Y%m%d").strftime("%d/%m/%Y")
 
     print(f"🔎 Analizando sumario del {fecha_formateada}...")
 
     for diario in diarios:
         for seccion in diario.get("seccion", []):
-            nombre_seccion = seccion.get("nombre", "")
-            if seccion_objetivo.lower() in nombre_seccion.lower():
+            if seccion_objetivo.lower() in seccion.get("nombre", "").lower():
                 departamentos = seccion.get("departamento", [])
                 if isinstance(departamentos, dict):
                     departamentos = [departamentos]
@@ -62,9 +78,16 @@ def filtrar_oposiciones_asturias(data, seccion_objetivo="B. Oposiciones y concur
                         for item in items:
                             titulo = item.get("titulo", "")
                             enlace = item.get("url_html", "")
+                            url_xml = item.get("url_xml", "")
                             if palabra_clave.lower() in titulo.lower():
                                 ayuntamiento = extraer_ayuntamiento(titulo)
-                                resultados.append([fecha_formateada, ayuntamiento, titulo, enlace])
+
+                                # --- Nuevo: leer XML y obtener nota relevante ---
+                                nota_turno = ""
+                                if url_xml:
+                                    nota_turno = obtener_nota_turno(url_xml)
+
+                                resultados.append([fecha_formateada, ayuntamiento, titulo, nota_turno, enlace])
     return resultados
 
 # -----------------------------------
@@ -76,7 +99,7 @@ def buscar_oposiciones_asturias(dias=15):
     inicio = hoy - timedelta(days=dias)
     resultados_totales = []
 
-    for i in range(dias+1):  # incluye hoy
+    for i in range(dias+1):
         fecha = inicio + timedelta(days=i)
         fecha_str = fecha.strftime("%Y%m%d")
         data = obtener_sumario(fecha_str)
@@ -93,43 +116,40 @@ def mostrar_tabla(resultados, dias):
     print("\n📊 RESULTADOS: Oposiciones y concursos en Asturias")
     print(f"(últimos {dias} días)\n")
     if resultados:
-        print(f"{'Fecha':<12} | {'Ayuntamiento':<30} | {'Enlace'}")
-        print("-"*100)
+        print(f"{'Fecha':<12} | {'Ayuntamiento':<30} | {'Nota turno':<50} | {'Enlace'}")
+        print("-"*160)
         for fila in resultados:
-            print(f"{fila[0]:<12} | {fila[1]:<30} | {fila[3]}")
+            nota_preview = (fila[3][:47] + "...") if len(fila[3]) > 50 else fila[3]
+            print(f"{fila[0]:<12} | {fila[1]:<30} | {nota_preview:<50} | {fila[4]}")
         print(f"\n✅ Se encontraron {len(resultados)} convocatorias en el rango indicado.")
     else:
         print("❌ No se encontraron oposiciones y concursos de Asturias en el rango indicado.")
 
 # -----------------------------------
-# Función 6: Exportar a Excel con formato
+# Función 6: Exportar a Excel
 # -----------------------------------
 def exportar_excel(resultados, nombre_archivo="oposiciones_asturias.xlsx"):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Convocatorias Asturias"
 
-    # Encabezados
-    encabezados = ["Fecha", "Ayuntamiento", "Título completo", "Enlace"]
+    encabezados = ["Fecha", "Ayuntamiento", "Título completo", "Nota turno", "Enlace"]
     ws.append(encabezados)
 
-    # Estilo de encabezados
     for col_num, encabezado in enumerate(encabezados, 1):
         celda = ws.cell(row=1, column=col_num)
         celda.font = Font(bold=True, color="FFFFFF")
         celda.fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
         celda.alignment = Alignment(horizontal="center", vertical="center")
 
-    # Datos con hipervínculo en la última columna
     for fila in resultados:
-        ws.append([fila[0], fila[1], fila[2], ""])
+        ws.append([fila[0], fila[1], fila[2], fila[3], ""])
         row_idx = ws.max_row
-        enlace_celda = ws.cell(row=row_idx, column=4)
+        enlace_celda = ws.cell(row=row_idx, column=5)
         enlace_celda.value = "Abrir BOE"
-        enlace_celda.hyperlink = fila[3]
+        enlace_celda.hyperlink = fila[4]
         enlace_celda.font = Font(color="0000FF", underline="single")
 
-    # Ajustar ancho de columnas
     for col in ws.columns:
         max_length = 0
         col_letter = get_column_letter(col[0].column)
@@ -138,25 +158,15 @@ def exportar_excel(resultados, nombre_archivo="oposiciones_asturias.xlsx"):
                 max_length = max(max_length, len(str(cell.value)))
         ws.column_dimensions[col_letter].width = max_length + 2
 
-    # Colores alternos en filas
     for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
         if row[0].row % 2 == 0:
             for cell in row:
                 cell.fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
 
-    # Construir ruta al Escritorio del usuario
     escritorio = os.path.join(os.path.expanduser("~"), "Desktop")
     ruta_final = os.path.join(escritorio, nombre_archivo)
-
-    # Guardar con control de errores
-    try:
-        wb.save(ruta_final)
-        print(f"📂 Datos exportados a Excel en la ruta {ruta_final}")
-    except PermissionError:
-        print(f"❌ No se pudo guardar {ruta_final}.")
-        print("ℹ️ Asegúrate de que el archivo no esté abierto en Excel y vuelve a intentarlo.")
-    except Exception as e:
-        print(f"❌ Error inesperado al guardar el archivo: {e}")
+    wb.save(ruta_final)
+    print(f"📂 Datos exportados a Excel en la ruta {ruta_final}")
 
 # -------------------------------
 # Ejecución principal
